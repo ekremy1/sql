@@ -1,0 +1,183 @@
+--DATABASE olusturma
+CREATE DATABASE ETicaretDB;
+GO
+--DB'yi kullanma
+USE ETicaretDB;
+GO
+--müşteriler tablosu oluşturma...
+CREATE TABLE Musteriler
+(
+MusteriID INT IDENTITY(1,1) PRIMARY KEY,
+Ad NVARCHAR(50) NOT NULL,
+Soyad NVARCHAR(50) NOT NULL,
+Sehir NVARCHAR(50) NOT NULL,
+KayitTarihi DATE DEFAULT GETDATE()
+);
+GO
+
+CREATE TABLE Urunler
+(
+UrunID INT IDENTITY(1,1) PRIMARY KEY,
+UrunAdi NVARCHAR(100) NOT NULL,
+Kategori NVARCHAR(50)NOT NULL,
+Fiyat DECIMAL(10,2) NOT NULL CHECK (Fiyat > 0),
+StokMiktari INT NOT NULL DEFAULT 0 CHECK (StokMiktari >= 0),
+);
+GO
+
+CREATE TABLE Siparisler 
+(
+    SiparisID INT IDENTITY(1,1) PRIMARY KEY,
+    MusteriID INT FOREIGN KEY REFERENCES Musteriler(MusteriID),
+    UrunID INT FOREIGN KEY REFERENCES Urunler(UrunID),
+    Adet INT CHECK (Adet > 0),
+    SiparisTarihi DATETIME DEFAULT GETDATE(),
+    Durum NVARCHAR(20) DEFAULT N'Hazırlanıyor'
+);
+GO
+--tablolara veri ekleme
+INSERT INTO Musteriler (ad,Soyad,Sehir)
+VALUES
+(N'Ahmet', N'Yılmaz', N'İstanbul'),
+(N'Ayşe', N'Demir', N'Ankara'),
+(N'Mehmet', N'Kaya', N'İzmir'),
+(N'Fatma', N'Çelik', N'Bursa');
+
+GO
+
+INSERT INTO Urunler (UrunAdi, Kategori, Fiyat, StokMiktari)
+VALUES
+(N'Laptop', N'Elektronik', 25000, 5),
+(N'Blender', N'Ev Eşyası', 1500, 8),
+(N'Tişört', N'Giyim', 400, 10),
+(N'Kitaplık', N'Mobilya', 3500, 3);
+
+GO
+
+INSERT INTO Siparisler (MusteriID, UrunID, Adet, Durum)
+VALUES
+(1, 1, 1, N'Hazırlanıyor'),
+(2, 2, 2, N'Hazırlanıyor'),
+(3, 3, 3, N'Kargolandı'),
+(4, 4, 1, N'Teslim Edildi');
+
+GO
+--sipariş detayları (inner join)
+SELECT
+    M.Ad + N' ' + M.Soyad AS [Müşteri Ad-Soyad],
+    M.Sehir AS [Şehir],
+    U.UrunAdi AS [Ürün Adı],
+    U.Fiyat AS [Birim Fiyat],
+    S.Adet AS [Adet],
+    U.Fiyat * S.Adet AS [Toplam Tutar],
+    S.SiparisTarihi AS [Sipariş Tarihi],
+    S.Durum AS [Durum]
+FROM Siparisler S
+INNER JOIN Musteriler M
+    ON S.MusteriID = M.MusteriID
+INNER JOIN Urunler U
+    ON S.UrunID = U.UrunID;
+	GO
+	--ciro hesaplama
+	SELECT
+    U.Kategori AS [Kategori],
+    SUM(S.Adet) AS [ToplamAdet],
+    SUM(U.Fiyat * S.Adet) AS [ToplamCiro]
+FROM Siparisler S
+INNER JOIN Urunler U
+    ON S.UrunID = U.UrunID
+GROUP BY U.Kategori;
+GO
+--DATEDIFF
+SELECT
+SiparisID AS [Sipariş No],
+SiparisTarihi AS [Sipariş Tarihi],
+Durum AS [Durum],
+DATEDIFF(HOUR, SiparisTarihi, GETDATE())
+    AS [Geçen Saat]
+FROM Siparisler
+WHERE Durum =N'Hazırlanıyor';
+GO
+--VIEW oluşturma
+CREATE VIEW vw_KargolanacakSiparisler
+
+AS 
+SELECT
+    M.Ad + N' ' + M.Soyad AS [Müşteri Ad-Soyad],
+	M.Sehir AS [Müşteri Şehir],
+	U.UrunAdi AS [Ürün Adı],
+	S.Adet AS [Adet],
+	S.SiparisTarihi AS [Sipariş Tarihi]
+	FROM Siparisler S
+	INNER JOIN Musteriler M
+	ON S.MusteriID = M.MusteriID
+	INNER JOIN Urunler U
+	ON S.UrunID = U.UrunID
+	WHERE S.Durum =N'Hazırlanıyor';
+	GO
+
+	SELECT * FROM vw_KargolanacakSiparisler;
+	GO
+--stok durumu
+
+CREATE PROCEDURE sp_SiparisOlustur
+    @MusteriID INT,
+    @UrunID INT,
+    @Adet INT
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    DECLARE @MevcutStok INT;
+
+    -- Adet kontrolü
+    IF @Adet <= 0
+    BEGIN
+        PRINT N'Hata: Sipariş adedi sıfırdan büyük olmalıdır!';
+        RETURN;
+    END;
+
+    -- Ürünün mevcut stok miktarını al
+    SELECT @MevcutStok = StokMiktari
+    FROM Urunler
+    WHERE UrunID = @UrunID;
+
+    -- Ürün mevcut değilse
+    IF @MevcutStok IS NULL
+    BEGIN
+        PRINT N'Hata: Ürün bulunamadı!';
+        RETURN;
+    END;
+
+    -- Stok yeterliyse
+    IF @MevcutStok >= @Adet
+    BEGIN
+        BEGIN TRY
+            BEGIN TRANSACTION;
+
+            INSERT INTO Siparisler
+                (MusteriID, UrunID, Adet, Durum)
+            VALUES
+                (@MusteriID, @UrunID, @Adet, N'Hazırlanıyor');
+
+            UPDATE Urunler
+            SET StokMiktari = StokMiktari - @Adet
+            WHERE UrunID = @UrunID;
+
+            COMMIT TRANSACTION;
+
+            PRINT N'Sipariş başarıyla oluşturuldu ve stok güncellendi.';
+        END TRY
+        BEGIN CATCH
+            IF @@TRANCOUNT > 0
+                ROLLBACK TRANSACTION;
+
+            THROW;
+        END CATCH;
+    END
+    ELSE
+    BEGIN
+        PRINT N'Hata: Yetersiz stok miktarı!';
+    END;
+END;
+GO
