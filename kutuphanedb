@@ -1,0 +1,172 @@
+--veritabanı oluşturma
+CREATE DATABASE KutuphaneeDB;
+GO
+
+USE KutuphaneeDB;
+GO
+--tablo oluşturma
+CREATE TABLE Ogrenciler
+(
+    OgrenciID INT IDENTITY(1,1) PRIMARY KEY,
+    Ad NVARCHAR(50) NOT NULL,
+    Soyad NVARCHAR(50) NOT NULL,
+    Bolum NVARCHAR(100) NOT NULL,
+    KayitTarihi DATE DEFAULT GETDATE()
+);
+GO
+CREATE TABLE Kitaplar
+(
+    KitapID INT IDENTITY(1,1) PRIMARY KEY,
+    KitapAdi NVARCHAR(100) NOT NULL,
+    Yazar NVARCHAR(100) NOT NULL,
+    StokAdedi INT DEFAULT 1 CHECK (StokAdedi >= 0)
+);
+GO
+CREATE TABLE OduncIslemleri
+(
+    OduncID INT IDENTITY(1,1) PRIMARY KEY,
+    OgrenciID INT NOT NULL,
+    KitapID INT NOT NULL,
+    AlisTarihi DATE DEFAULT GETDATE(),
+    TeslimTarihi DATE NULL,
+
+    CONSTRAINT FK_Odunc_Ogrenci
+        FOREIGN KEY (OgrenciID)
+        REFERENCES Ogrenciler(OgrenciID),
+
+    CONSTRAINT FK_Odunc_Kitap
+        FOREIGN KEY (KitapID)
+        REFERENCES Kitaplar(KitapID)
+);
+GO
+--veri girişi
+INSERT INTO Ogrenciler (Ad, Soyad, Bolum)
+VALUES
+('ekrem', 'Yurttaş', 'Bilgisayar Teknolojileri'),
+('arif', 'er', 'Endüstri Mühendisliği'),
+('yılmaz', 'Kara', 'Bilgisayar Mühendisliği'),
+('mahmut', 'karaca', 'Elektrik Mühendisliği');
+GO
+
+INSERT INTO Kitaplar (KitapAdi, Yazar, StokAdedi)
+VALUES
+('DUNE', 'Frank Herbert', 3),
+('Tutunamayanlar', 'Oğuz Atay', 5),
+('İnce Memed', 'Yaşar Kemal', 2),
+('Aşk-ı Memnu', 'Halit Ziya Uşaklıgil', 4); 
+GO
+
+INSERT INTO OduncIslemleri
+    (OgrenciID, KitapID, AlisTarihi, TeslimTarihi)
+VALUES
+    (1, 1, '2026-11-01', '2026-11-05'),
+    (2, 2, '2026-11-02', NULL),
+    (3, 3, '2026-11-03', '2026-11-07'),
+    (4, 4, '2026-11-04', NULL);
+	GO
+	--innerjoin
+	SELECT 
+    Ogrenciler.Ad + ' ' + Ogrenciler.Soyad AS [Öğrenci Ad-Soyad],
+    Kitaplar.KitapAdi AS [Kitap Adı],
+    OduncIslemleri.AlisTarihi AS [Alış Tarihi],
+    CASE
+        WHEN OduncIslemleri.TeslimTarihi IS NULL 
+            THEN 'Teslim Edilmedi'
+        ELSE 'Teslim Edildi'
+    END AS [Teslim Durumu]
+FROM OduncIslemleri
+INNER JOIN Ogrenciler
+    ON OduncIslemleri.OgrenciID = Ogrenciler.OgrenciID
+INNER JOIN Kitaplar
+    ON OduncIslemleri.KitapID = Kitaplar.KitapID;
+	GO
+	--left join/group by
+	SELECT
+    Ogrenciler.Bolum AS [Bölüm Adı],
+    COUNT(OduncIslemleri.OduncID) AS [Toplam Ödünç Sayısı]
+FROM Ogrenciler
+LEFT JOIN OduncIslemleri
+    ON Ogrenciler.OgrenciID = OduncIslemleri.OgrenciID
+GROUP BY Ogrenciler.Bolum;
+GO
+--datediff/where
+SELECT
+    Ogrenciler.Ad + ' ' + Ogrenciler.Soyad AS [Öğrenci Ad-Soyad],
+    Kitaplar.KitapAdi AS [Kitap Adı],
+    DATEDIFF(DAY, OduncIslemleri.AlisTarihi, GETDATE()) AS [Kaç Gündür Öğrencide]
+FROM OduncIslemleri
+INNER JOIN Ogrenciler
+    ON OduncIslemleri.OgrenciID = Ogrenciler.OgrenciID
+INNER JOIN Kitaplar
+    ON OduncIslemleri.KitapID = Kitaplar.KitapID
+WHERE OduncIslemleri.TeslimTarihi IS NULL;
+GO
+
+
+--create view
+USE KutuphaneeDB;
+GO
+
+CREATE VIEW AktifOdunc
+AS
+SELECT
+    Ogrenciler.Ad + ' ' + Ogrenciler.Soyad AS [Öğrenci Ad-Soyad],
+    Kitaplar.KitapAdi AS [Kitap Adı],
+    OduncIslemleri.AlisTarihi AS [Alış Tarihi]
+FROM OduncIslemleri
+INNER JOIN Ogrenciler
+    ON OduncIslemleri.OgrenciID = Ogrenciler.OgrenciID
+INNER JOIN Kitaplar
+    ON OduncIslemleri.KitapID = Kitaplar.KitapID
+WHERE OduncIslemleri.TeslimTarihi IS NULL;
+GO
+SELECT * FROM AktifOdunc;
+
+--create procedure
+
+USE KutuphaneeDB;
+GO
+CREATE PROCEDURE sp_KitapOduncVer
+    @OgrenciID INT,
+    @KitapID INT
+AS
+BEGIN
+
+    DECLARE @Stok INT;
+
+    -- Kitabın mevcut stok miktarını al
+    SELECT @Stok = StokAdedi
+    FROM Kitaplar
+    WHERE KitapID = @KitapID;
+
+    -- Stok 0'dan büyükse kitap ödünç ver
+    IF @Stok > 0
+    BEGIN
+
+        -- Ödünç işlemini kaydet
+        INSERT INTO OduncIslemleri
+            (OgrenciID, KitapID, AlisTarihi, TeslimTarihi)
+        VALUES
+            (@OgrenciID, @KitapID, GETDATE(), NULL);
+
+        -- Kitap stok miktarını 1 azalt
+        UPDATE Kitaplar
+        SET StokAdedi = StokAdedi - 1
+        WHERE KitapID = @KitapID;
+
+        PRINT 'Kitap başarıyla ödünç verildi.';
+
+    END
+
+    -- Stok 0 ise işlem yapma
+    ELSE
+    BEGIN
+
+        PRINT 'Hata: Seçilen kitabın stoğu tükenmiştir!';
+
+    END
+END;
+GO
+EXEC sp_KitapOduncVer
+    @OgrenciID = 1,
+    @KitapID = 1;
